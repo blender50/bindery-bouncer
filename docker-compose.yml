@@ -30,4 +30,9 @@ services:
     environment:
       - BINDERY_URL=${BINDERY_URL}
       - BINDERY_API_KEY=${BINDERY_API_KEY}
+      # working_dir below is set to /audiobooks (so the default CSV report
+      # path lands in the library on the host), which shadows the image's
+      # WORKDIR /app -- without this, `python3 -m bindery_bouncer` can't
+      # find its own module from the wrong cwd.
+      - PYTHONPATH=/app
     entrypoint: ["python3", "-m", "bindery_bouncer", "--library-path", "/audiobooks"]
