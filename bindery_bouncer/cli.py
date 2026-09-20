@@ -49,8 +49,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                           help="e.g. http://blender:8787/api/v1. Or set BINDERY_URL.")
     bindery.add_argument("--bindery-api-key", default=os.environ.get("BINDERY_API_KEY"),
                           help="Bindery API key (Settings -> API in the UI). Or set BINDERY_API_KEY.")
-    bindery.add_argument("--bindery-status", default="downloaded",
-                          help="Book status to pull from Bindery for the catalogue cross-check (default: downloaded).")
+    bindery.add_argument("--bindery-status", default="imported",
+                          help="Book status to pull from Bindery for the catalogue cross-check (default: imported -- "
+                               "confirmed via --dump-sample against a real instance; Bindery's enum is "
+                               "imported/wanted, not \"downloaded\").")
     bindery.add_argument("--no-bindery", action="store_true",
                           help="Skip the Bindery catalogue cross-check entirely (tags + audio only, less accurate).")
     bindery.add_argument("--dump-sample", action="store_true",

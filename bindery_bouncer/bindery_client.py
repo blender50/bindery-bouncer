@@ -85,7 +85,15 @@ def _author_to_str(value: Any) -> Optional[str]:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        return value.get("name") or value.get("author") or value.get("displayName")
+        # Confirmed via --dump-sample: a book's "author" field is a nested
+        # object shaped like {"authorName": "...", "sortName": "...", ...},
+        # not a flat string -- authorName has to come first here.
+        return (
+            value.get("authorName")
+            or value.get("name")
+            or value.get("author")
+            or value.get("displayName")
+        )
     if isinstance(value, list):
         names = [_author_to_str(v) for v in value]
         names = [n for n in names if n]
@@ -151,7 +159,7 @@ class BinderyClient:
             params["page"] = page
         return self._get("/book", params=params)
 
-    def iter_all_books(self, status: str = "downloaded") -> list[BookRecord]:
+    def iter_all_books(self, status: str = "imported") -> list[BookRecord]:
         """
         Fetch every book at the given status, defensively handling either a
         bare JSON array response or a {"items": [...], "total": N, ...} /
@@ -193,7 +201,7 @@ class BinderyClient:
 
         return records
 
-    def dump_sample(self, status: str = "downloaded") -> Any:
+    def dump_sample(self, status: str = "imported") -> Any:
         """Return the raw JSON for the first page/book, for schema inspection. See README."""
         return self.list_books_raw(status=status)
 
