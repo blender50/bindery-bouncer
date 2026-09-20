@@ -7,11 +7,21 @@
 # to this one (see .env.example) before running. --library-path inside the
 # container is always /audiobooks -- that's the mount point below, not the
 # host path.
+#
+# Unraid "Compose Manager" plugin: clone this repo (Dockerfile +
+# docker-compose.yml need to sit together, since the build context is local)
+# to wherever you keep compose projects, e.g. /mnt/user/appdata/bindery-bouncer,
+# drop your .env there too, then in the plugin's Docker Compose tab use
+# "Add New Stack" -> point it at that existing folder rather than pasting YAML
+# into a fresh one. Clicking "Compose Up" runs one scan and the container then
+# exits (0) on its own -- that's expected for a one-shot tool, not a crash.
+# Run it again by clicking "Compose Up" each time you want another pass.
 
 services:
   bindery-bouncer:
     build: .
     image: bindery-bouncer:latest
+    container_name: bindery-bouncer
     volumes:
       - ${AUDIOBOOKS_PATH}:/audiobooks
     # So the default report filename (no --report-csv given) lands inside the
