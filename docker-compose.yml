@@ -1,0 +1,23 @@
+# One-shot tool, not a long-running service -- invoke with:
+#   docker compose run --rm bindery-bouncer --dump-sample
+#   docker compose run --rm bindery-bouncer --verbose
+#   docker compose run --rm bindery-bouncer --execute --confirmed-action quarantine
+#
+# Fill in AUDIOBOOKS_PATH / BINDERY_URL / BINDERY_API_KEY in a .env file next
+# to this one (see .env.example) before running. --library-path inside the
+# container is always /audiobooks -- that's the mount point below, not the
+# host path.
+
+services:
+  bindery-bouncer:
+    build: .
+    image: bindery-bouncer:latest
+    volumes:
+      - ${AUDIOBOOKS_PATH}:/audiobooks
+    # So the default report filename (no --report-csv given) lands inside the
+    # mounted library on the host instead of vanishing with the container on exit.
+    working_dir: /audiobooks
+    environment:
+      - BINDERY_URL=${BINDERY_URL}
+      - BINDERY_API_KEY=${BINDERY_API_KEY}
+    entrypoint: ["python3", "-m", "bindery_bouncer", "--library-path", "/audiobooks"]
