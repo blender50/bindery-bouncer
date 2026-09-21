@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -237,6 +238,108 @@ class BounceIntegrationTest(unittest.TestCase):
         self.assertIn(("POST", "/api/v1/history/501/blocklist"), methods_paths)
         self.assertIn(("PUT", "/api/v1/book/1"), methods_paths)
         self.assertNotIn(("POST", "/api/v1/book/1/search"), methods_paths)
+
+
+class NewOnlyModeTest(unittest.TestCase):
+    """
+    --new-only + --state-file: the scheduled/cron-friendly mode. Runs entirely
+    tag-only (--no-bindery --skip-audio) since these tests are about mtime
+    quiescence and state persistence, not the detection signals themselves
+    (those are covered above).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="bindery_bouncer_newonly_")
+        rng = np.random.default_rng(2)
+        # _synthetic_music/_synthetic_speech both loop out to the module-level
+        # DUR regardless of n, so n has to match that -- content doesn't
+        # actually matter here since these tests run with --skip-audio.
+        n = int(SR * DUR)
+
+        self.bad_dir = os.path.join(self.tmp, "Harry Turtledove", "Brothers in Arms")
+        self.good_dir = os.path.join(self.tmp, "Some Author", "Correct Book")
+        os.makedirs(self.bad_dir)
+        os.makedirs(self.good_dir)
+        self.bad_file = os.path.join(self.bad_dir, "01 - Track.flac")
+        self.good_file = os.path.join(self.good_dir, "01 - Chapter 1.flac")
+        sf.write(self.bad_file, _synthetic_music(n, rng), SR, format="FLAC")
+        sf.write(self.good_file, _synthetic_speech(n, rng), SR, format="FLAC")
+
+        bad_tags = FLAC(self.bad_file)
+        bad_tags.update(title="Money for Nothing", artist="Dire Straits",
+                         album="Brothers in Arms", genre="Rock")
+        bad_tags.save()
+        good_tags = FLAC(self.good_file)
+        good_tags.update(title="Chapter 1", artist="Some Author",
+                          album="Correct Book", genre="Audiobook")
+        good_tags.save()
+
+        self.state_path = os.path.join(self.tmp, "state.json")
+        self.report_path = os.path.join(self.tmp, "report.csv")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _backdate(self, seconds):
+        then = time.time() - seconds
+        for f in (self.bad_file, self.good_file):
+            os.utime(f, (then, then))
+
+    def _run(self, extra_args=None):
+        if os.path.exists(self.report_path):
+            os.remove(self.report_path)
+        args = [
+            "--library-path", self.tmp,
+            "--no-bindery", "--skip-audio",
+            "--new-only", "--min-quiet-seconds", "3600",
+            "--state-file", self.state_path,
+            "--report-csv", self.report_path,
+        ] + (extra_args or [])
+        return run(args)
+
+    def _report_folders(self):
+        if not os.path.exists(self.report_path):
+            return set()
+        with open(self.report_path, newline="") as f:
+            return {row["folder"] for row in csv.DictReader(f)}
+
+    def test_recently_modified_folders_are_skipped(self):
+        # Files were just written -- mtime is "now", well inside the 1h window.
+        rc = self._run()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._report_folders(), set())
+
+    def test_quiet_clean_folder_is_processed_then_skipped_next_tick(self):
+        self._backdate(7200)
+        rc = self._run()
+        self.assertEqual(rc, 0)
+        self.assertIn(self.good_dir, self._report_folders())
+        # Nothing changed about the clean folder since -- state should skip
+        # it on the next tick (bad_dir reappears regardless -- it's still
+        # unresolved dry-run output, covered by the test below).
+        rc = self._run()
+        self.assertEqual(rc, 0)
+        self.assertNotIn(self.good_dir, self._report_folders())
+
+    def test_dry_run_flag_is_not_swallowed_by_state(self):
+        self._backdate(7200)
+        self._run()  # dry run: bad_dir flagged suspect (tag genre alone), nothing done
+        self.assertIn(self.bad_dir, self._report_folders())
+        # Unresolved (dry run never executes) -- must be reconsidered, not skipped.
+        self._run()
+        self.assertIn(self.bad_dir, self._report_folders())
+
+    def test_execute_resolves_and_state_then_skips_next_tick(self):
+        self._backdate(7200)
+        rc = self._run(["--execute", "--confirmed-action", "quarantine", "--suspect-action", "quarantine"])
+        self.assertEqual(rc, 0)
+        self.assertIn(self.bad_dir, self._report_folders())
+        self.assertFalse(os.path.exists(self.bad_file))  # quarantined out of the library
+        # Everything that was still present (the clean folder) is now resolved
+        # in state too -- a repeat tick with no changes is a no-op.
+        rc = self._run()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._report_folders(), set())
 
 
 if __name__ == "__main__":

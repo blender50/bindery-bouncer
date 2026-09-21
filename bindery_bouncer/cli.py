@@ -28,6 +28,7 @@ from . import actions
 from .bindery_client import BinderyClient, BookRecord, build_path_index, remap_prefix
 from .listen import analyze_file
 from .scorer import ScoringConfig, assess_folder
+from .state import folder_signature, load_state, save_state
 from .tags import group_by_folder, read_tags
 
 try:
@@ -93,6 +94,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     loop.add_argument("--no-search-after-blocklist", action="store_true",
                        help="After blocklisting and re-wanting, don't trigger an immediate re-search -- "
                             "let Bindery's normal sweep (default: every 12h) pick it up instead.")
+
+    incr = p.add_argument_group("Scheduled / incremental scanning")
+    incr.add_argument("--new-only", action="store_true",
+                       help="Only assess folders that have changed since the last --new-only run and have "
+                            "gone quiet (no file changes) for at least --min-quiet-seconds. Meant to be "
+                            "invoked on a schedule (e.g. cron via Unraid's User Scripts plugin) so freshly "
+                            "grabbed audiobooks get checked automatically without rescanning your whole "
+                            "library every tick. A folder flagged confirmed/suspect in a dry run is never "
+                            "marked done -- only a clean verdict or a real --execute resolves it, so nothing "
+                            "gets silently skipped just because a scheduled tick already looked at it once. "
+                            "Calibrate thresholds with a normal full run first -- see README.")
+    incr.add_argument("--min-quiet-seconds", type=int, default=3600,
+                       help="In --new-only mode, only consider a folder once its newest file's mtime is at "
+                            "least this many seconds old (default: 3600 = 1 hour) -- guards against catching "
+                            "a folder mid-download/import.")
+    incr.add_argument("--state-file", default=None,
+                       help="In --new-only mode, where to remember already-handled folders (default: "
+                            "<library-path>/.bindery_bouncer_state.json).")
 
     p.add_argument("--report-csv", default=None,
                     help="CSV report path (default: bindery_bouncer_report_<timestamp>.csv in the current directory).")
@@ -193,6 +212,34 @@ def run(argv: Optional[list[str]] = None) -> int:
     folders = {f: files for f, files in folders.items() if not f.startswith(quarantine_dir)}
     print(f"Found {len(folders)} folders with audio files under {args.library_path}.")
 
+    state_path = None
+    state: dict = {}
+    signatures: dict[str, str] = {}
+    if args.new_only:
+        state_path = args.state_file or os.path.join(args.library_path, ".bindery_bouncer_state.json")
+        state = load_state(state_path)
+        now = time.time()
+        still_active = 0
+        unchanged = 0
+        eligible = {}
+        for folder, files in folders.items():
+            try:
+                latest_mtime = max(os.path.getmtime(f) for f in files)
+            except OSError:
+                continue
+            if now - latest_mtime < args.min_quiet_seconds:
+                still_active += 1
+                continue
+            sig = folder_signature(latest_mtime, len(files))
+            if state.get(folder) == sig:
+                unchanged += 1
+                continue
+            signatures[folder] = sig
+            eligible[folder] = files
+        folders = eligible
+        print(f"  --new-only: {len(folders)} folder(s) changed and quiet for >= {args.min_quiet_seconds}s "
+              f"({still_active} still active/recent, {unchanged} unchanged since last recorded run).")
+
     config = ScoringConfig(
         audio_strong_threshold=args.audio_strong_threshold,
         meta_strong_threshold=args.meta_strong_threshold,
@@ -247,6 +294,21 @@ def run(argv: Optional[list[str]] = None) -> int:
                 except actions.UnsafePathError as e:
                     action_taken = f"SKIPPED (safety check failed: {e})"
 
+        if args.new_only:
+            # Only mark a folder "done" once it's genuinely resolved -- clean,
+            # or actually acted on by --execute. A dry-run flag (or a
+            # "report"-only action) leaves it unresolved so the next tick
+            # reconsiders it, instead of a scheduled run silently treating a
+            # one-time look as having handled it.
+            resolved = assessment.tier == "clean"
+            if assessment.tier in ("confirmed", "suspect") and args.execute:
+                chosen = args.confirmed_action if assessment.tier == "confirmed" else args.suspect_action
+                if chosen in ("delete", "quarantine") and not action_taken.startswith("SKIPPED"):
+                    resolved = True
+            if resolved:
+                state[folder] = signatures[folder]
+                save_state(state_path, state)
+
         if assessment.tier != "clean" or args.verbose:
             print(f"[{assessment.tier.upper():9s}] {action_taken:35s} {folder}")
             for reason in assessment.reasons:
@@ -281,7 +343,12 @@ def run(argv: Optional[list[str]] = None) -> int:
 
     print("\n--- Summary ---")
     print(f"  confirmed: {tier_counts['confirmed']}   suspect: {tier_counts['suspect']}   clean: {tier_counts['clean']}")
-    print(f"  Full report: {report_path}")
+    if rows:
+        print(f"  Full report: {report_path}")
+    elif args.new_only:
+        print("  Nothing new/changed-and-quiet to check this tick -- no report written.")
+    if args.new_only:
+        print(f"  State file: {state_path}")
     if not args.execute and (tier_counts["confirmed"] or tier_counts["suspect"]):
         print("  This was a DRY RUN -- nothing on disk was changed. Re-run with --execute once you've "
               "checked the report and are happy with the calls it's making.")

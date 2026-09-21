@@ -88,6 +88,55 @@ tool: an earlier version took the *best* similarity across title-or-author
 and got fooled by the coincidental title match in the "Brothers in Arms"
 scenario. See `tests/test_integration.py` for the regression test.
 
+## Running it automatically as new audiobooks arrive
+
+This is still a one-shot tool, not a service -- there's no daemon to keep
+running. Instead, `--new-only` makes each invocation cheap enough to put on
+a schedule: it only assesses folders that have changed since the last
+`--new-only` run *and* have gone quiet (no file changes) for at least
+`--min-quiet-seconds` (default 1 hour, tune with that flag), so a freshly
+grabbed audiobook gets checked automatically without rescanning your whole
+library every tick, and without catching a folder mid-download/import.
+
+```bash
+docker compose run --rm bindery-bouncer --new-only --execute --confirmed-action quarantine
+```
+
+It remembers what it's already handled in a small JSON state file (default
+`<library-path>/.bindery_bouncer_state.json`, override with `--state-file`)
+-- keyed on each folder's newest-file mtime and file count, so a re-grab of
+the same book (new mtime) gets reconsidered. Importantly, a folder only
+gets marked "done" once it's genuinely resolved: a `clean` verdict, or an
+actual `--execute`'d delete/quarantine. A folder flagged `confirmed` or
+`suspect` during a dry run is *not* marked done, so it keeps showing up on
+every tick until you either act on it (turn on `--execute`) or the folder's
+contents change -- nothing gets silently swallowed just because a scheduled
+run already looked at it once.
+
+**Why polling instead of watching the folder live:** Unraid's `/mnt/user`
+share is a FUSE overlay (shfs), and filesystem-watch APIs like inotify are
+well known to be unreliable on it -- it's the same reason Sonarr/Radarr/
+Readarr all recommend polling over real-time monitoring on Unraid. A cron
+tick that just checks mtimes avoids that whole class of missed-event bugs.
+
+**Wiring up the schedule on Unraid** (via the free "User Scripts" plugin
+from Community Apps -- Settings -> User Scripts -> Add New Script):
+
+```bash
+#!/bin/bash
+cd /mnt/user/appdata/compose.manager/projects/bindery-bouncer
+docker compose run --rm bindery-bouncer --new-only --execute --confirmed-action quarantine
+```
+
+Set its schedule to "Custom" with a cron expression like `*/15 * * * *`
+(every 15 minutes) or `0 * * * *` (hourly) -- since `--min-quiet-seconds`
+already gates *when* a folder becomes eligible, ticking more often than
+that just means less latency once something goes quiet, not repeated work.
+
+Only turn this on after you trust the tool against your own library (see
+calibration below), and start with `--confirmed-action quarantine` rather
+than `delete` here too, same as a manual run.
+
 ## Calibrate before you trust it
 
 Be honest with yourself about what the audio analysis is: a cheap DSP
