@@ -151,36 +151,45 @@ class BinderyClient:
         resp.raise_for_status()
         return resp.json() if resp.content else None
 
-    def list_books_raw(self, status: Optional[str] = None, page: Optional[int] = None) -> Any:
+    def list_books_raw(
+        self, status: Optional[str] = None, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> Any:
         params = {}
         if status:
             params["status"] = status
-        if page is not None:
-            params["page"] = page
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
         return self._get("/book", params=params)
 
-    def iter_all_books(self, status: str = "imported") -> list[BookRecord]:
+    def iter_all_books(self, status: str = "imported", page_size: int = 100) -> list[BookRecord]:
         """
-        Fetch every book at the given status, defensively handling either a
-        bare JSON array response or a {"items": [...], "total": N, ...} /
-        {"data": [...]} paginated envelope, and simple page-number pagination
-        if one of those keys is present.
+        Fetch every book at the given status.
+
+        Bindery paginates with offset/limit, not page numbers -- confirmed via
+        --dump-sample against a real instance, whose responses look like
+        {"items": [...], "total": N, "limit": 100, "offset": 0}. (An earlier
+        version of this method sent a "page" query param instead, which
+        Bindery silently ignores -- every request came back as the same first
+        page, so only the first `page_size` books in the whole library ever
+        got loaded, and everything past that silently lost its catalogue
+        cross-check. Caught by comparing a real scan's "N book records"
+        startup line against the actual library size.)
         """
         records: list[BookRecord] = []
-        page = 1
+        offset = 0
         seen_ids = set()
+        total = None
         while True:
-            payload = self.list_books_raw(status=status, page=page)
+            payload = self.list_books_raw(status=status, limit=page_size, offset=offset)
             if isinstance(payload, list):
                 items = payload
-                has_more = False
             elif isinstance(payload, dict):
                 items = payload.get("items") or payload.get("data") or payload.get("books") or []
-                total = payload.get("total") or payload.get("totalCount")
-                has_more = bool(total) and (page * max(len(items), 1)) < total and len(items) > 0
+                total = payload.get("total") or payload.get("totalCount") or total
             else:
                 items = []
-                has_more = False
 
             if not items:
                 break
@@ -193,10 +202,13 @@ class BinderyClient:
                 seen_ids.add(key)
                 records.append(rec)
 
-            if not has_more:
+            offset += len(items)
+            if total is not None and offset >= total:
                 break
-            page += 1
-            if page > 500:  # sanity guard against a pagination-detection bug looping forever
+            if len(items) < page_size:
+                # Short page and no usable total to check against -- treat as the last page.
+                break
+            if offset > 200_000:  # sanity guard against an unbounded loop
                 break
 
         return records
