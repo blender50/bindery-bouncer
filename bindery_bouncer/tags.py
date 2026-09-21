@@ -24,6 +24,16 @@ AUDIOBOOK_GENRES = {
 
 # Common music genre tags. Not exhaustive -- if a genre is present and NOT
 # in AUDIOBOOK_GENRES and NOT unknown, we treat it as a music signal.
+#
+# This is deliberately broad, not just the "top level" genres: caught from a
+# real false negative during calibration against a live ~1700-book library,
+# two folders genuinely containing metal albums (genre tags "Death Metal"
+# and "Hardcore") scored no signal at all here, because neither subgenre was
+# on the original, much shorter list -- an unrecognized genre falls through
+# to "no signal" (None) by design (see genre_is_music below), which is the
+# safe default for an odd/unexpected tag, but is exactly the wrong default
+# for a real, common music subgenre nobody thought to list. A whitelist like
+# this can never be fully exhaustive, so if you hit another one, add it here.
 KNOWN_MUSIC_GENRES = {
     "rock", "pop", "metal", "heavy metal", "hip-hop", "hip hop", "rap",
     "country", "jazz", "classical", "electronic", "dance", "r&b", "rnb",
@@ -31,6 +41,34 @@ KNOWN_MUSIC_GENRES = {
     "alternative rock", "singer/songwriter", "singer-songwriter",
     "soundtrack", "world", "latin", "k-pop", "edm", "house", "techno",
     "disco", "grunge", "new wave", "ambient", "experimental",
+    # Metal subgenres
+    "death metal", "black metal", "doom metal", "doom", "sludge",
+    "thrash metal", "thrash", "power metal", "symphonic metal",
+    "folk metal", "nu metal", "metalcore", "deathcore", "grindcore",
+    "gothic metal", "progressive metal", "prog metal", "industrial metal",
+    # Hardcore / punk subgenres
+    "hardcore", "hardcore punk", "punk rock", "pop punk", "post-hardcore",
+    "screamo", "emo", "crust punk", "ska punk",
+    # Electronic subgenres
+    "trance", "psytrance", "dubstep", "drum and bass", "dnb",
+    "drum & bass", "breakbeat", "garage", "uk garage", "jungle", "trap",
+    "future bass", "synthwave", "vaporwave", "chillwave", "downtempo",
+    "idm", "glitch", "industrial", "ebm", "deep house", "tech house",
+    # Hip-hop / rap subgenres
+    "drill", "grime", "boom bap",
+    # Rock subgenres
+    "indie rock", "classic rock", "hard rock", "soft rock", "prog rock",
+    "progressive rock", "post-rock", "math rock", "psychedelic rock",
+    "garage rock", "southern rock", "glam rock", "folk rock",
+    # Pop subgenres
+    "synthpop", "electropop", "dream pop", "art pop", "j-pop", "dance pop",
+    # Other
+    "bluegrass", "gospel", "christian rock", "worship", "opera",
+    "orchestral", "film score", "video game music", "chiptune", "vgm",
+    "dub", "dancehall", "afrobeat", "bossa nova", "samba", "salsa",
+    "flamenco", "lounge", "easy listening", "swing", "big band",
+    "americana", "noise", "drone", "musical theatre", "a cappella",
+    "barbershop",
 }
 
 
