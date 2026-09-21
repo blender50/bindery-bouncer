@@ -205,11 +205,28 @@ works the same way tacked onto `docker compose run --rm bindery-bouncer ...`
 -- `--library-path` is already baked in as `/audiobooks` by the compose file,
 so you don't need to pass it yourself.
 
-If Bindery is also a container on blender and its bind-mount destination is
-also `/audiobooks` (matching the convention in Bindery's own README example),
-the paths line up automatically and you can skip `--bindery-path-prefix`
-entirely -- both containers see the same in-container path for the same host
-folder. Only reach for that flag if the two mount points genuinely differ.
+**Don't assume the mount points line up -- check.** It's tempting to think
+that if Bindery is also a container on blender, and its bind-mount
+destination happens to also be named `/audiobooks`, the paths just line up.
+On Steve's real setup they didn't: `--dump-sample` on a book with a
+populated `audiobookFilePath` showed Bindery reporting paths under
+`/data/media/audiobooks/...`, a completely different root than this
+container's own `/audiobooks` mount -- and with `--bindery-path-prefix`
+unset (the default), every local folder path failed to match anything in
+the catalogue index, silently, with no error and no warning. The catalogue
+cross-check (the strongest signal this tool has) was effectively disabled
+for the whole library, and it looked indistinguishable from "nothing wrong
+here" in the output.
+
+`docker-compose.yml` now bakes in the value confirmed correct for Steve's
+own Bindery instance (`--bindery-path-prefix /data/media/audiobooks`). If
+you're setting this up against a different Bindery instance, don't trust
+that value or the "matching convention" assumption -- verify for yourself:
+run `--dump-sample`, or better, fetch a book you know has an audiobook file
+and look at its raw `audiobookFilePath`, and compare that prefix against
+what this container's `/audiobooks` mount actually corresponds to on your
+host. Only skip `--bindery-path-prefix` once you've confirmed the two
+really do match.
 
 ## Running without Docker
 

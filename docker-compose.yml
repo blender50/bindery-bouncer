@@ -35,4 +35,14 @@ services:
       # WORKDIR /app -- without this, `python3 -m bindery_bouncer` can't
       # find its own module from the wrong cwd.
       - PYTHONPATH=/app
-    entrypoint: ["python3", "-m", "bindery_bouncer", "--library-path", "/audiobooks"]
+    # --bindery-path-prefix: confirmed via a live catalogue dump that Steve's
+    # Bindery container sees audiobook files under /data/media/audiobooks
+    # (not /audiobooks, which is only this container's own mount point) --
+    # without this, every single local folder path fails to match anything
+    # in the catalogue index, no matter how many books are indexed. This is
+    # specific to how Bindery's own container is set up on blender; if you
+    # ever repoint this at a different Bindery instance, re-check with
+    # --dump-sample (look at a book's audiobookFilePath) before assuming
+    # this value still applies.
+    entrypoint: ["python3", "-m", "bindery_bouncer", "--library-path", "/audiobooks",
+                 "--bindery-path-prefix", "/data/media/audiobooks"]
