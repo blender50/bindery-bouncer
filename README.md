@@ -5,16 +5,31 @@ audiobook library that are actually music -- e.g. Dire Straits' *Brothers in
 Arms* filed where the audiobook of the same name should be -- and lets you
 clear them out with a confidence tier instead of one all-or-nothing guess.
 
-## TL;DR: flag reference
+## TL;DR
 
-Quick reference -- full context for each flag is in the sections below.
-Everything here works tacked onto `docker compose run --rm bindery-bouncer
-...`; `--library-path` is already baked in as `/audiobooks` by the compose
-file, so you only need the rest.
+Everything below works tacked onto `docker compose run --rm bindery-bouncer
+...`. You never need to pass `--library-path` yourself in this Docker
+workflow -- it's already baked in as `/audiobooks` by `docker-compose.yml`.
 
-| Flag | Default | What it does |
-|---|---|---|
-| `--library-path` | *(required)* | Root folder of your audiobook library to scan. Baked in as `/audiobooks` by `docker-compose.yml`. |
+**Basic usage**
+
+```bash
+# Dry run (the default) -- writes a CSV report, touches nothing on disk
+docker compose run --rm bindery-bouncer --verbose
+
+# First real run -- move flagged folders to quarantine, delete nothing
+docker compose run --rm bindery-bouncer --execute --confirmed-action quarantine
+
+# Skip the Bindery catalogue cross-check -- tags + audio only
+docker compose run --rm bindery-bouncer --no-bindery --verbose
+
+# Scheduled/incremental run, meant for cron -- see "Running it
+# automatically" below
+docker compose run --rm bindery-bouncer --new-only --execute --confirmed-action quarantine
+```
+
+**Full flag reference** -- full context for each flag is in the sections
+below.
 
 **Bindery API (catalogue cross-check)**
 
