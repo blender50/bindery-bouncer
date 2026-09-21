@@ -5,6 +5,69 @@ audiobook library that are actually music -- e.g. Dire Straits' *Brothers in
 Arms* filed where the audiobook of the same name should be -- and lets you
 clear them out with a confidence tier instead of one all-or-nothing guess.
 
+## TL;DR: flag reference
+
+Quick reference -- full context for each flag is in the sections below.
+Everything here works tacked onto `docker compose run --rm bindery-bouncer
+...`; `--library-path` is already baked in as `/audiobooks` by the compose
+file, so you only need the rest.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--library-path` | *(required)* | Root folder of your audiobook library to scan. Baked in as `/audiobooks` by `docker-compose.yml`. |
+
+**Bindery API (catalogue cross-check)**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--bindery-url` | `$BINDERY_URL` | Bindery's API base URL, e.g. `http://blender:8787/api/v1`. |
+| `--bindery-api-key` | `$BINDERY_API_KEY` | Bindery API key (Settings -> API in the UI). |
+| `--bindery-status` | `imported` | Book status pulled for the catalogue cross-check. Bindery's real enum is `imported`/`wanted`, not `downloaded`. |
+| `--no-bindery` | off | Skip the catalogue cross-check entirely -- tags + audio only. Loses the strongest signal (author comparison); expect more `suspect`, fewer `confirmed`. |
+| `--dump-sample` | off | Print one raw page of Bindery's `/book` response and exit, for checking `bindery_client.py`'s field guesses against your instance. |
+| `--bindery-path-prefix` | none | Path prefix as Bindery's own container sees your library, if different from `--library-path`. **Don't assume it matches -- verify with `--dump-sample`** (see the path-prefix section below). |
+| `--local-path-prefix` | `--library-path` | Path prefix as this script sees your library. |
+
+**Audio content analysis**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--skip-audio` | off | Skip DSP audio analysis -- fast, tag+catalogue only (audio sampling is the slowest step). |
+| `--samples-per-folder` | `2` | How many files per folder to run audio analysis on. |
+| `--audio-strong-threshold` | `0.68` | `music_score` at/above this counts as strong audio evidence. Tune against your own library -- see Calibrate below. |
+| `--meta-strong-threshold` | `0.6` | Tag-vs-catalogue mismatch score at/above this counts as strong metadata evidence. |
+
+**What to do with flagged folders**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--execute` | off (dry run) | Actually move/delete files. Without it, everything is dry-run -- report written, nothing on disk changes. |
+| `--confirmed-action` | `delete` | Action for the `confirmed` tier: `delete` / `quarantine` / `report`. |
+| `--suspect-action` | `quarantine` | Action for the `suspect` tier: `delete` / `quarantine` / `report`. |
+| `--quarantine-dir` | `<library-path>/_bindery_bouncer_quarantine` | Where quarantined folders go. |
+
+**Closing the loop with Bindery** (only after an actual delete, never a quarantine)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--no-close-loop` | off | Don't blocklist the release or re-want the book after a delete -- just delete the file and stop. |
+| `--no-search-after-blocklist` | off | After blocklisting + re-wanting, don't trigger an immediate re-search -- let Bindery's normal sweep (~12h) pick it up. |
+
+**Scheduled / incremental scanning**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--new-only` | off | Only assess folders changed since the last `--new-only` run and quiet for `--min-quiet-seconds`. Meant for a cron/scheduled invocation -- see "Running it automatically" below. |
+| `--min-quiet-seconds` | `3600` | In `--new-only` mode, how many seconds a folder's newest file must sit untouched before it's eligible (guards against catching a mid-download/import folder). |
+| `--state-file` | `<library-path>/.bindery_bouncer_state.json` | In `--new-only` mode, where already-handled folders are remembered. |
+
+**Output**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--report-csv` | `bindery_bouncer_report_<timestamp>.csv` in cwd | CSV report path. |
+| `--verbose` | off | Print every folder's verdict as it's scanned, not just flagged ones. |
+
 ## Why this exists
 
 Bindery's audiobook release matching has a known gap
