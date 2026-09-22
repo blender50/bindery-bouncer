@@ -116,9 +116,15 @@ Three independent signals, each looked at separately:
 
 These are combined with a rule, not a single blended score:
 
-- **confirmed** -- the audio sounds music-like *and* at least one other
-  signal agrees (wrong genre tag, or catalogue mismatch). Default action:
-  **delete**.
+- **confirmed** -- any two of the three signals agree (wrong genre tag,
+  catalogue mismatch, or the audio sounding music-like). Genre tag and
+  catalogue mismatch are each derived independently, so those two agreeing
+  is enough on their own -- audio doesn't have to be one of the two, though
+  it can be. This matters in practice: the audio DSP score is a cheap
+  heuristic (see Calibrate below), and on at least one real library it
+  never crossed the default 0.68 threshold even on since-confirmed real
+  misfilings, which would make `confirmed` unreachable if audio were
+  mandatory. Default action: **delete**.
 - **suspect** -- exactly one signal fired on its own. Default action:
   **quarantine** (moved to a `_bindery_bouncer_quarantine` folder inside your
   library, nothing deleted).

@@ -152,7 +152,19 @@ def assess_folder(
         # Explicit protective signal: don't flag on audio-score alone when the
         # file's own genre tag says audiobook and the catalogue doesn't disagree.
         tier = "clean"
-    elif strong_audio and corroborating >= 1:
+    elif corroborating >= 2 or (strong_audio and corroborating >= 1):
+        # "Two independent signals agreeing" (see module docstring) originally
+        # meant literally that -- any two of the three -- but this used to
+        # require strong_audio specifically as one of the two, which made
+        # "confirmed" unreachable on a real library where the audio DSP score
+        # never crossed threshold even on since-confirmed real misfilings
+        # (Andy McNab's "Deep Black"/"Exit Wound" scored 0.31-0.54 against a
+        # 0.68 default). Tag-genre and metadata-mismatch are each derived
+        # independently (one from the genre field, one from an artist/album
+        # vs. catalogue comparison), so two of them agreeing is real
+        # corroboration on its own, without needing audio's help. Audio is
+        # still honored as one of the two when it does fire, for libraries/
+        # genres where the DSP score is more discriminating than it was here.
         tier = "confirmed"
     elif strong_audio or strong_tag_music or strong_meta_mismatch:
         tier = "suspect"
