@@ -43,6 +43,26 @@ def delete_folder(folder: str, library_root: str) -> None:
     prune_empty_parents(os.path.dirname(folder), library_root)
 
 
+def restore_folder(quarantined_folder: str, original_path: str, library_root: str) -> None:
+    """
+    Move a previously-quarantined folder back to its original location -- the
+    other half of a manual review verdict (see --apply-decisions): the
+    reviewer listened and decided this one really is a correctly-filed
+    audiobook that got caught by a single, misleading signal. No undo once
+    done, same as delete/quarantine.
+    """
+    quarantined_folder = _require_inside(quarantined_folder, library_root)
+    original_path = _require_inside(original_path, library_root)
+    if os.path.exists(original_path):
+        raise UnsafePathError(
+            f"refusing to restore over an existing path {original_path!r} -- "
+            f"something else already occupies this folder's original spot"
+        )
+    os.makedirs(os.path.dirname(original_path), exist_ok=True)
+    shutil.move(quarantined_folder, original_path)
+    prune_empty_parents(os.path.dirname(quarantined_folder), library_root)
+
+
 def prune_empty_parents(start_dir: str, library_root: str) -> None:
     """Remove now-empty parent directories left behind by a delete/quarantine, up to (not including) library_root."""
     root_norm = os.path.realpath(library_root)

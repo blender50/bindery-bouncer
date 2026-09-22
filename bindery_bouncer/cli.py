@@ -113,6 +113,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
                        help="In --new-only mode, where to remember already-handled folders (default: "
                             "<library-path>/.bindery_bouncer_state.json).")
 
+    review = p.add_argument_group("Manual review of quarantined folders")
+    review.add_argument("--apply-decisions", default=None,
+                         help="Path to a decisions CSV (relative_path,decision -- decision is 'audiobook' or "
+                              "'music') produced by review_quarantine.py after you've listened to your "
+                              "quarantined folders by hand. 'audiobook' restores the folder to its original "
+                              "spot in the library; 'music' permanently deletes it from quarantine and, unless "
+                              "--no-close-loop, closes the loop with Bindery exactly like an automatic "
+                              "confirmed delete would. Runs instead of a normal scan -- combine with --execute "
+                              "the same way (omit it for a dry run first).")
+
     p.add_argument("--report-csv", default=None,
                     help="CSV report path (default: bindery_bouncer_report_<timestamp>.csv in the current directory).")
     p.add_argument("--verbose", action="store_true", help="Print every folder's verdict as it's scanned, not just flagged ones.")
@@ -132,13 +142,21 @@ def _to_bindery_view(local_path: str, args) -> str:
     return remap_prefix(local_path, args.local_path_prefix or args.library_path, args.bindery_path_prefix)
 
 
-def _close_bindery_loop(client, expected, tags_list, args) -> str:
+def _close_bindery_loop(client, expected, sample_path, args,
+                         reason: str = "bindery-bouncer: confirmed music/wrong-file mismatch") -> str:
     """
     After an actual delete of a confirmed-bad folder: blocklist the release
     that put it there and re-want the book, so the next sweep (or an
     immediate manual search) goes looking for a real copy instead of quietly
     leaving the book marked done-and-missing. Best-effort -- an API hiccup
     here should never be treated as the delete itself having failed.
+
+    `sample_path` is any raw file path from the folder, used only to help
+    find the right history entry to blocklist -- it deliberately doesn't
+    depend on that file's tags having parsed successfully (find_history_
+    entry_for_path falls back to the book's most recent history entry
+    regardless), so a corrupted or unparseable file in the folder never
+    silently skips the blocklist step the way relying on parsed tags would.
     """
     if client is None:
         return "skipped (no Bindery connection, e.g. --no-bindery)"
@@ -146,12 +164,11 @@ def _close_bindery_loop(client, expected, tags_list, args) -> str:
         return "skipped (no matched Bindery book id for this folder)"
 
     try:
-        sample_path = tags_list[0].path if tags_list else None
         entry = client.find_history_entry_for_path(expected.id, sample_path) if sample_path else None
         history_id = client.extract_history_id(entry) if entry else None
 
         if history_id is not None:
-            client.blocklist_history(history_id, reason="bindery-bouncer: confirmed music/wrong-file mismatch")
+            client.blocklist_history(history_id, reason=reason)
             blocklist_note = f"blocklisted history #{history_id}"
         else:
             blocklist_note = "no matching history entry found to blocklist"
@@ -167,6 +184,82 @@ def _close_bindery_loop(client, expected, tags_list, args) -> str:
         return f"{blocklist_note}; {wanted_note}; {search_note}"
     except requests.exceptions.RequestException as e:
         return f"FAILED ({e})"
+
+
+def _apply_decisions(args, client, path_index: dict[str, BookRecord], quarantine_dir: str) -> int:
+    """
+    Apply a human's audiobook/music verdicts (see review_quarantine.py) for
+    folders currently sitting in quarantine. This is the other half of the
+    suspect-tier workflow: bindery-bouncer quarantines what it's only
+    single-signal confident about, a person listens and decides, and this
+    replays that decision onto the filesystem (and Bindery, for a 'music'
+    verdict) -- same dry-run-by-default/--execute pattern as a normal scan.
+    """
+    if not os.path.isfile(args.apply_decisions):
+        print(f"Decisions file not found: {args.apply_decisions}", file=sys.stderr)
+        return 2
+
+    with open(args.apply_decisions, newline="") as f:
+        decision_rows = list(csv.DictReader(f))
+
+    restored = deleted = skipped = 0
+    for row in decision_rows:
+        relpath = (row.get("relative_path") or "").strip()
+        decision = (row.get("decision") or "").strip().lower()
+        if not relpath:
+            continue
+        quarantined_path = os.path.join(quarantine_dir, relpath)
+        original_path = os.path.join(args.library_path, relpath)
+
+        if not os.path.isdir(quarantined_path):
+            print(f"[MISSING  ] {relpath} -- not in quarantine (already applied, or moved by hand?)")
+            skipped += 1
+            continue
+
+        if decision == "audiobook":
+            verb = "would RESTORE" if not args.execute else "RESTORE"
+            print(f"[AUDIOBOOK] {verb:<15} {relpath}")
+            if args.execute:
+                try:
+                    actions.restore_folder(quarantined_path, original_path, args.library_path)
+                except actions.UnsafePathError as e:
+                    print(f"             SKIPPED (safety check failed: {e})")
+                    skipped += 1
+                    continue
+            restored += 1
+
+        elif decision == "music":
+            verb = "would DELETE" if not args.execute else "DELETE"
+            print(f"[MUSIC    ] {verb:<15} {relpath}")
+            if args.execute:
+                files = [os.path.join(dp, fn) for dp, _dn, fns in os.walk(quarantined_path) for fn in fns]
+                expected = path_index.get(_to_bindery_view(original_path, args))
+                try:
+                    actions.delete_folder(quarantined_path, args.library_path)
+                except actions.UnsafePathError as e:
+                    print(f"             SKIPPED (safety check failed: {e})")
+                    skipped += 1
+                    continue
+                if not args.no_close_loop:
+                    loop_status = _close_bindery_loop(
+                        client, expected, files[0] if files else None, args,
+                        reason="bindery-bouncer: manually confirmed music/wrong-file mismatch (review_quarantine.py)",
+                    )
+                else:
+                    loop_status = "skipped (--no-close-loop)"
+                print(f"             bindery_loop: {loop_status}")
+            deleted += 1
+
+        else:
+            print(f"[SKIP     ] {relpath} -- unrecognized decision {decision!r} (expected 'audiobook' or 'music')")
+            skipped += 1
+
+    print()
+    print("--- Apply summary ---")
+    print(f"  restored: {restored}   deleted: {deleted}   skipped: {skipped}")
+    if not args.execute:
+        print("  This was a DRY RUN -- nothing on disk was changed. Re-run with --execute to apply these decisions.")
+    return 0
 
 
 def run(argv: Optional[list[str]] = None) -> int:
@@ -206,6 +299,9 @@ def run(argv: Optional[list[str]] = None) -> int:
         print(f"  {len(records)} book records, {len(path_index)} indexed paths.")
 
     quarantine_dir = args.quarantine_dir or os.path.join(args.library_path, "_bindery_bouncer_quarantine")
+
+    if args.apply_decisions:
+        return _apply_decisions(args, client, path_index, quarantine_dir)
 
     folders = group_by_folder(args.library_path)
     # Never scan into our own quarantine folder.
@@ -285,7 +381,8 @@ def run(argv: Optional[list[str]] = None) -> int:
                         # Close the loop with Bindery -- ONLY on an actual delete, never on
                         # quarantine (the file's still there, so the book isn't really missing yet).
                         if not args.no_close_loop:
-                            loop_status = _close_bindery_loop(client, expected, tags_list, args)
+                            sample_path = tags_list[0].path if tags_list else (files[0] if files else None)
+                            loop_status = _close_bindery_loop(client, expected, sample_path, args)
                         else:
                             loop_status = "skipped (--no-close-loop)"
                     elif chosen == "quarantine":

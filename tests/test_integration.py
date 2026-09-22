@@ -342,5 +342,109 @@ class NewOnlyModeTest(unittest.TestCase):
         self.assertEqual(self._report_folders(), set())
 
 
+class ApplyDecisionsTest(unittest.TestCase):
+    """
+    --apply-decisions: replays a human's audiobook/music verdicts (from
+    review_quarantine.py) for folders already sitting in quarantine --
+    the other half of the suspect-tier workflow.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="bindery_bouncer_apply_test_")
+        self.quarantine_dir = os.path.join(self.tmp, "_bindery_bouncer_quarantine")
+
+        # A folder that was quarantined but turns out, on a human listen, to
+        # really be the correct audiobook (single misleading signal, e.g. an
+        # oddly-tagged genre) -- should get RESTORED.
+        self.audiobook_rel = os.path.join("Some Author", "Actually Fine Book")
+        self.audiobook_quarantined = os.path.join(self.quarantine_dir, self.audiobook_rel)
+        os.makedirs(self.audiobook_quarantined)
+        with open(os.path.join(self.audiobook_quarantined, "01.mp3"), "wb") as f:
+            f.write(b"fake narration")
+
+        # A folder that a human listen confirms really is misfiled music --
+        # should get DELETED, with the loop closed with Bindery.
+        self.music_rel = os.path.join("Harry Turtledove", "Brothers in Arms")
+        self.music_quarantined = os.path.join(self.quarantine_dir, self.music_rel)
+        os.makedirs(self.music_quarantined)
+        self.music_file = os.path.join(self.music_quarantined, "01 - Track.mp3")
+        with open(self.music_file, "wb") as f:
+            f.write(b"fake music")
+
+        # Bindery's catalogue only ever knows about the folder's *original*
+        # location -- it has no idea this tool later quarantined it -- so
+        # the book/history records point there, not into quarantine.
+        original_music_path = os.path.join(self.tmp, self.music_rel, "01 - Track.mp3")
+        MockBinderyHandler.books = [
+            {"id": 1, "title": "Brothers in Arms", "author": {"name": "Harry Turtledove"},
+             "mediaType": "audiobook", "editions": [{"formats": [{"path": original_music_path}]}]},
+        ]
+        MockBinderyHandler.history = [
+            {"id": 501, "bookId": 1, "path": original_music_path, "event": "imported"},
+        ]
+        MockBinderyHandler.calls = []
+        self.server = HTTPServer(("127.0.0.1", 0), MockBinderyHandler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        self.decisions_path = os.path.join(self.tmp, "decisions.csv")
+        with open(self.decisions_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["relative_path", "decision"])
+            w.writerow([self.audiobook_rel, "audiobook"])
+            w.writerow([self.music_rel, "music"])
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, extra_args=None):
+        args = [
+            "--library-path", self.tmp,
+            "--bindery-url", f"http://127.0.0.1:{self.port}/api/v1",
+            "--bindery-api-key", "testkey",
+            "--apply-decisions", self.decisions_path,
+        ] + (extra_args or [])
+        return run(args)
+
+    def test_dry_run_touches_nothing(self):
+        rc = self._run()
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.exists(self.audiobook_quarantined))
+        self.assertTrue(os.path.exists(self.music_quarantined))
+        self.assertEqual(MockBinderyHandler.calls, [])
+
+    def test_execute_restores_audiobook_and_deletes_music(self):
+        rc = self._run(["--execute"])
+        self.assertEqual(rc, 0)
+        restored = os.path.join(self.tmp, self.audiobook_rel, "01.mp3")
+        self.assertTrue(os.path.exists(restored))
+        self.assertFalse(os.path.exists(self.audiobook_quarantined))
+        self.assertFalse(os.path.exists(self.music_quarantined))
+
+    def test_execute_closes_the_loop_for_the_music_verdict_only(self):
+        rc = self._run(["--execute"])
+        self.assertEqual(rc, 0)
+        methods_paths = [(m, p) for m, p, _ in MockBinderyHandler.calls]
+        self.assertIn(("POST", "/api/v1/history/501/blocklist"), methods_paths)
+        self.assertIn(("PUT", "/api/v1/book/1"), methods_paths)
+        self.assertIn(("POST", "/api/v1/book/1/search"), methods_paths)
+
+    def test_no_close_loop_flag_is_honored(self):
+        rc = self._run(["--execute", "--no-close-loop"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(MockBinderyHandler.calls, [])
+        self.assertFalse(os.path.exists(self.music_quarantined))  # delete itself still happens
+
+    def test_missing_quarantine_folder_is_reported_not_crashed(self):
+        # Simulates re-running apply-decisions after it already ran once.
+        shutil.rmtree(self.audiobook_quarantined)
+        rc = self._run(["--execute"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(self.music_quarantined))  # the other row still applies fine
+
+
 if __name__ == "__main__":
     unittest.main()

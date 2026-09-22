@@ -68,6 +68,12 @@ below.
 | `--no-close-loop` | off | Don't blocklist the release or re-want the book after a delete -- just delete the file and stop. |
 | `--no-search-after-blocklist` | off | After blocklisting + re-wanting, don't trigger an immediate re-search -- let Bindery's normal sweep (~12h) pick it up. |
 
+**Manual review of quarantined folders**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--apply-decisions` | none | Path to a decisions CSV from `review_quarantine.py` (see below). Runs instead of a normal scan: `audiobook` restores a folder to its original spot, `music` deletes it from quarantine and closes the loop with Bindery, same as a `confirmed` delete. |
+
 **Scheduled / incremental scanning**
 
 | Flag | Default | What it does |
@@ -171,6 +177,49 @@ what actually catches it. This was a real bug caught while building this
 tool: an earlier version took the *best* similarity across title-or-author
 and got fooled by the coincidental title match in the "Brothers in Arms"
 scenario. See `tests/test_integration.py` for the regression test.
+
+## Reviewing quarantined folders by hand
+
+`suspect` folders are quarantined, not deleted, precisely because only one
+signal fired -- some of them will be real misfilings just like the
+`confirmed` ones, and some will be correctly-filed audiobooks caught by a
+single misleading tag. `review_quarantine.py` (in this repo, no
+dependencies beyond the standard library and macOS's built-in `afplay`)
+makes working through a big batch of these fast: it shows you the tool's
+own reasoning for each folder first (often enough to decide without
+listening at all -- an artist tag that's a real band with no plausible
+connection to the book's author is a pretty clear tell), plays a short
+snippet on request, and records your yes/no as you go so you can stop and
+resume across as many sittings as you need.
+
+Run it on your own machine, against a **local copy** of the quarantine
+folder -- not against the share in place over the network, and not on the
+server itself:
+
+```bash
+rsync -avz root@blender:/mnt/user/data/media/audiobooks/_bindery_bouncer_quarantine/ \
+    ~/bindery_review/quarantine/
+rsync -avz root@blender:/mnt/user/appdata/compose.manager/projects/bindery-bouncer/bindery_bouncer_report_*.csv \
+    ~/bindery_review/
+python3 review_quarantine.py --quarantine-root ~/bindery_review/quarantine \
+    --report-csv ~/bindery_review/bindery_bouncer_report_20260922_003738.csv
+```
+
+(swap in the actual report filename from the run that created your
+quarantine batch). It writes `decisions.csv` inside `--quarantine-root` as
+you go -- copy that back to blender and apply it:
+
+```bash
+docker compose run --rm bindery-bouncer --apply-decisions /audiobooks/decisions.csv
+docker compose run --rm bindery-bouncer --apply-decisions /audiobooks/decisions.csv --execute
+```
+
+Dry run first, same as everything else here. `audiobook` restores a folder
+to its original spot in the library; `music` permanently deletes it from
+quarantine and, unless `--no-close-loop`, closes the loop with Bindery
+exactly like an automatic `confirmed` delete would (blocklist, re-want,
+re-search) -- a human confirming it's really misfiled music deserves the
+same follow-through as the tool confirming it automatically.
 
 ## Running it automatically as new audiobooks arrive
 
